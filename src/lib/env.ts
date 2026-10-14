@@ -15,10 +15,16 @@ export function serverEnv() {
     emailFrom: process.env.EMAIL_FROM || '',
     googleClientId: process.env.GOOGLE_CLIENT_ID || '',
     googleSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    cronSecret: process.env.CRON_SECRET || ''
+    cronSecret: process.env.CRON_SECRET || '',
+    // Gmail (or any SMTP) instead of Resend — no own domain needed
+    smtpUser: process.env.SMTP_USER || '',
+    smtpPass: (process.env.SMTP_PASS || '').replace(/\s+/g, ''),
+    smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
+    smtpPort: Number(process.env.SMTP_PORT || 465),
+    smtpInsecure: process.env.SMTP_INSECURE_TEST === '1'
   };
 }
 export function integrationStatus() {
   const s = serverEnv();
-  return { email: !!(s.resendKey && s.emailFrom), google: !!(s.googleClientId && s.googleSecret), service: !!s.serviceKey, cron: !!s.cronSecret };
+  return { email: !!((s.resendKey && s.emailFrom) || (s.smtpUser && s.smtpPass)), google: !!(s.googleClientId && s.googleSecret), service: !!s.serviceKey, cron: !!s.cronSecret };
 }

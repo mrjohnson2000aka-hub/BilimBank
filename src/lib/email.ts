@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { env, serverEnv } from './env';
 import en from './i18n/en';
 import uz from './i18n/uz';
+import { sendSmtp } from './smtp';
 import { credits, dateTime, fill, skillName, timeOnly } from './format';
 
 type Lang = 'en' | 'uz';
@@ -52,7 +53,8 @@ export async function sendDueEmails(admin: SupabaseClient, limit = 25) {
     if (!claimed?.length) continue;
     const mark = (status: string, err?: string) => admin.from('email_outbox').update({ status, last_error: err || null, sent_at: status === 'sent' ? new Date().toISOString() : null }).eq('id', e.id);
     try {
-      if (!s.resendKey || !s.emailFrom) { await mark('skipped', 'email provider not configured'); out.skipped++; continue; }
+      const useSmtp = !!(s.smtpUser && s.smtpPass);
+      if (!useSmtp && (!s.resendKey || !s.emailFrom)) { await mark('skipped', 'email provider not configured'); out.skipped++; continue; }
       const { data: p } = await admin.from('profiles').select('display_name,preferred_lang,timezone,email_prefs,status').eq('id', e.user_id).single();
       if (!p || p.status === 'deleted') { await mark('skipped', 'recipient unavailable'); out.skipped++; continue; }
       const prefs = (p.email_prefs || {}) as Record<string, boolean>;
@@ -61,9 +63,14 @@ export async function sendDueEmails(admin: SupabaseClient, limit = 25) {
       const to = u?.user?.email; if (!to) { await mark('skipped', 'no email'); out.skipped++; continue; }
       const msg = await compose(admin, e.template, e.dedupe_key, e.data || {}, e.user_id, p as { display_name: string; preferred_lang: Lang; timezone: string });
       if (!msg) { await mark('skipped', 'no longer relevant'); out.skipped++; continue; }
-      const r = await fetch(`${process.env.RESEND_API_BASE || 'https://api.resend.com'}/emails`, { method: 'POST', headers: { Authorization: `Bearer ${s.resendKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: s.emailFrom, to: [to], subject: msg.subject, html: msg.html, text: msg.text }) });
-      if (!r.ok) throw new Error(`Resend ${r.status}: ${(await r.text()).slice(0, 200)}`);
+      if (useSmtp) {
+        await sendSmtp({ host: s.smtpHost, port: s.smtpPort, user: s.smtpUser, pass: s.smtpPass, insecure: s.smtpInsecure },
+          { from: s.emailFrom || `BilimBank <${s.smtpUser}>`, to, subject: msg.subject, html: msg.html, text: msg.text });
+      } else {
+        const r = await fetch(`${process.env.RESEND_API_BASE || 'https://api.resend.com'}/emails`, { method: 'POST', headers: { Authorization: `Bearer ${s.resendKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: s.emailFrom, to: [to], subject: msg.subject, html: msg.html, text: msg.text }) });
+        if (!r.ok) throw new Error(`Resend ${r.status}: ${(await r.text()).slice(0, 200)}`);
+      }
       await mark('sent'); out.sent++;
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
